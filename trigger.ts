@@ -1,0 +1,58 @@
+import 'dotenv/config';
+import { TaskClient, textPart, decodeInlineArtifact } from '@blocks-network/sdk';
+import type { ProgressEvent, ArtifactEvent, TerminalEvent } from '@blocks-network/sdk';
+
+/**
+ * Trigger a task on the kikis_integration_troubleshooter agent and print the result.
+ * Usage: npx tsx trigger.ts
+ */
+async function main() {
+  const apiKey = process.env.BLOCKS_API_KEY;
+  if (!apiKey) {
+    console.error(
+      "BLOCKS_API_KEY not set. This script runs without the Blocks CLI, so it cannot use your 'blocks login' profile: run 'blocks login --write-env' to copy its key into .env, or set BLOCKS_API_KEY in .env yourself.",
+    );
+    process.exit(1);
+  }
+
+  // billingMode selects the PubNub keyset for this deployment — a protocol
+  // detail, not a pricing choice. Leave it as 'free'.
+  const client = await TaskClient.create({
+    billingMode: 'free',
+    apiKey,
+  });
+
+  const session = await client.sendMessage({
+    agentName: 'ai_integration_troubleshooter',
+    requestParts: [
+      textPart(
+        'POST https://api.billing.example/v1/charges returned HTTP 401 Unauthorized. Body: {"error":"invalid_api_key","message":"API key expired"}. The Authorization header was present.',
+        'request',
+      ),
+    ],
+  });
+
+  console.log('Task created:', session.taskId);
+
+  session.onProgress((event: ProgressEvent) => {
+    console.log('[progress]', event.message ?? event.progress ?? '');
+  });
+  session.onArtifact(async (event: ArtifactEvent) => {
+    const ref = event.artifactRef;
+    if (ref.kind === 'inline' && ref.data) {
+      const bytes = decodeInlineArtifact(ref);
+      console.log('[artifact]', new TextDecoder().decode(bytes));
+    } else {
+      const downloaded = await session.downloadArtifact(ref);
+      console.log('[artifact]', new TextDecoder().decode(downloaded.data));
+    }
+  });
+  session.onTerminal((_event: TerminalEvent) => {
+    console.log('[done] Task complete');
+    session.close();
+    client.destroy();
+    process.exit(0);
+  });
+}
+
+main().catch(console.error);
